@@ -8,7 +8,7 @@ public enum CodexUsage {
         guard let executable = paths.map({ "\($0)/codex" }).first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
             throw UsageError.message("Install the Codex CLI, then run codex login with your ChatGPT account.")
         }
-        let session = CodexSession(executable: executable)
+        let session = CodexSession(executable: executable, searchPath: paths.joined(separator: ":"))
         return try await withTaskCancellationHandler {
             try await Task.detached { try session.fetch() }.value
         } onCancel: {
@@ -27,11 +27,15 @@ final class CodexSession: @unchecked Sendable {
     private var buffer = Data()
     private let timeoutSeconds: TimeInterval
 
-    init(executable: String, timeoutSeconds: TimeInterval = 20) {
+    init(executable: String, searchPath: String = ProcessInfo.processInfo.environment["PATH"] ?? "", timeoutSeconds: TimeInterval = 20) {
         self.timeoutSeconds = timeoutSeconds
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = ["-c", "analytics.enabled=false", "-c", "otel.exporter=\"none\"", "app-server", "--listen", "stdio://"]
         process.currentDirectoryURL = FileManager.default.temporaryDirectory
+        // Finder's PATH omits Homebrew, but npm's Codex launcher needs to find node.
+        var environment = ProcessInfo.processInfo.environment
+        environment["PATH"] = searchPath
+        process.environment = environment
         process.standardInput = input
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice

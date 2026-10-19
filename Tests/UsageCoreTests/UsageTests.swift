@@ -79,6 +79,25 @@ private func withExecutable(_ body: String, run: (String) throws -> Void) throws
     }
 }
 
+@Test func codexLauncherFindsItsRuntimeInTheDiscoveryPath() throws {
+    try withExecutable("") { path in
+        let directory = URL(fileURLWithPath: path).deletingLastPathComponent()
+        let runtime = directory.appendingPathComponent("usagebar-test-runtime")
+        try """
+        #!/bin/sh
+        IFS= read -r initialize
+        printf '%s\\n' '{"id":0,"result":{}}'
+        IFS= read -r initialized
+        IFS= read -r request
+        printf '%s\\n' '{"id":1,"result":{"rateLimits":{"primary":{"usedPercent":17,"windowDurationMins":300}}}}'
+        """.write(to: runtime, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: runtime.path)
+        try "#!/usr/bin/env usagebar-test-runtime\n".write(toFile: path, atomically: false, encoding: .utf8)
+        let windows = try CodexSession(executable: path, searchPath: directory.path, timeoutSeconds: 2).fetch()
+        #expect(windows[0].usedPercent == 17)
+    }
+}
+
 @Test func codexErrorResponseDoesNotLeakServerDetails() throws {
     try withExecutable("""
     IFS= read -r initialize
