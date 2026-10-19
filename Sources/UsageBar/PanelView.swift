@@ -50,7 +50,17 @@ struct PanelView: View {
     private func provider(_ service: Service, state: UsageState) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text(service.rawValue).font(.headline)
+                HStack(spacing: 6) {
+                    Text(service.rawValue).font(.headline)
+                    Image(nsImage: Bundle.module.image(forResource: NSImage.Name(service.rawValue))!)
+                        .renderingMode(service == .codex ? .template : .original)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 18, height: 18)
+                        .clipped()
+                        .foregroundStyle(.primary)
+                        .accessibilityHidden(true)
+                }
                 Spacer()
                 if state.loading { ProgressView().controlSize(.small).accessibilityLabel("Loading \(service.rawValue) usage") }
                 Link(destination: service.dashboard) { Image(systemName: "arrow.up.right.square") }
@@ -68,7 +78,7 @@ struct PanelView: View {
                     }.font(.subheadline)
                     if let percent = window.usedPercent {
                         ProgressView(value: percent, total: 100)
-                            .tint(percent >= 90 ? .orange : .accentColor)
+                            .tint(service == .claude ? Color(red: 217.0 / 255, green: 119.0 / 255, blue: 87.0 / 255) : .blue)
                             .accessibilityLabel("\(service.rawValue), \(window.id)")
                             .accessibilityValue("\(Int(percent.rounded())) percent used")
                     }
