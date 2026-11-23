@@ -8,15 +8,14 @@ struct UsageBarMain {
     static func main() async {
         if CommandLine.arguments.contains("--check-live") {
             var failed = false
-            for service in Service.allCases {
+            for provider in Provider.discover() {
                 do {
-                    let windows = try await (service == .claude ? ClaudeUsage.fetch() : CodexUsage.fetch())
-                    for window in windows {
-                        print("\(service.rawValue) · \(window.id): \(window.usedPercent.map { String($0) } ?? "unavailable")% used")
+                    for window in try await provider.fetch() {
+                        print("\(provider.label) · \(window.id): \(window.usedPercent.map { String($0) } ?? "unavailable")% used")
                     }
                 } catch {
                     failed = true
-                    print("\(service.rawValue): \(error.localizedDescription)")
+                    print("\(provider.label): \(error.localizedDescription)")
                 }
             }
             exit(failed ? 1 : 0)
@@ -30,9 +29,9 @@ struct UsageBarMain {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate {
     private let store = UsageStore()
-    private let popover = NSPopover()
+    private let panel = UsagePanel()
     private var statusItem: NSStatusItem!
     private var hotKey: GlobalShortcut!
     private var shortcut = ShortcutChoice(rawValue: UserDefaults.standard.string(forKey: "shortcut") ?? "") ?? .controlOptionU
@@ -49,8 +48,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             button.action = #selector(togglePanel)
             button.setAccessibilityLabel("UsageBar")
         }
-        popover.behavior = .transient
-        popover.delegate = self
+        panel.onClose = { [weak self] in
+            self?.store.cancel()
+            self?.statusItem.button?.highlight(false)
+        }
         hotKey = GlobalShortcut { [weak self] in self?.togglePanel() }
         if !hotKey.register(shortcut) {
             shortcutError = "\(shortcut.rawValue) is unavailable. Choose another shortcut in Settings."
@@ -70,18 +71,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             }
             self.updateContent()
         })
-        popover.contentViewController = NSHostingController(rootView: PanelView(store: store, shortcut: selection, shortcutError: shortcutError))
+        panel.setContent(PanelView(store: store, shortcut: selection, shortcutError: shortcutError))
     }
 
     @objc private func togglePanel() {
-        if popover.isShown { popover.performClose(nil); return }
-        guard let button = statusItem.button else { return }
-        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-        NSApp.activate(ignoringOtherApps: true)
-        popover.contentViewController?.view.window?.makeKey()
+        if panel.isOpen { panel.close(); return }
+        guard let button = statusItem.button, let window = button.window else { return }
+        panel.show(below: window.convertToScreen(button.convert(button.bounds, to: nil)), on: window.screen)
+        button.highlight(true)
         store.refresh()
     }
 
-    func popoverDidClose(_ notification: Notification) { store.cancel() }
     func applicationWillTerminate(_ notification: Notification) { store.cancel() }
 }

@@ -1,9 +1,9 @@
 import Foundation
-import Security
 
 public enum ClaudeUsage {
-    public static func fetch() async throws -> [UsageWindow] {
-        let token = try await Task.detached { try accessToken() }.value
+    public static func fetch(account: ClaudeAccount) async throws -> [UsageWindow] {
+        let service = account.keychainService
+        let token = try await Task.detached { try accessToken(service: service) }.value
         try Task.checkCancellation()
         var request = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
         request.timeoutInterval = 20
@@ -34,18 +34,8 @@ public enum ClaudeUsage {
         let claudeAiOauth: OAuth?
     }
 
-    private static func accessToken() throws -> String {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: "Claude Code-credentials",
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess, let data = result as? Data else {
-            throw UsageError.message("Allow UsageBar to read the Claude Code keychain entry, or sign in using claude and /login.")
-        }
+    private static func accessToken(service: String) throws -> String {
+        let data = try keychainItem(service: service)
         guard let oauth = try JSONDecoder().decode(Credentials.self, from: data).claudeAiOauth,
               !oauth.accessToken.isEmpty else {
             throw UsageError.message("Sign in to your Claude subscription using claude and /login.")
@@ -54,6 +44,31 @@ public enum ClaudeUsage {
             throw UsageError.message("Claude sign-in expired. Open claude to refresh it, then retry.")
         }
         return oauth.accessToken
+    }
+
+    // Claude Code writes its credentials with /usr/bin/security, so the item's ACL trusts only that tool.
+    // Reading through it avoids a keychain prompt that would otherwise return after every rebuild of this
+    // ad-hoc signed app and whenever Claude Code rewrites the item on token refresh.
+    private static func keychainItem(service: String) throws -> Data {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        process.arguments = ["find-generic-password", "-s", service, "-w"]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        process.standardInput = FileHandle.nullDevice
+        do { try process.run() } catch {
+            throw UsageError.message("Could not run /usr/bin/security to read the Claude Code login.")
+        }
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        switch process.terminationStatus {
+        case 0 where !data.isEmpty:
+            // `security -w` ends the secret with a newline.
+            return data.last == UInt8(ascii: "\n") ? data.dropLast() : data
+        case 44: throw UsageError.message("No Claude Code login found. Sign in using claude and /login.")
+        default: throw UsageError.message("Could not read the Claude Code keychain entry. Open claude to check your login, then retry.")
+        }
     }
 }
 

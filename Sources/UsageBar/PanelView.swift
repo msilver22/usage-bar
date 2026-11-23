@@ -18,13 +18,13 @@ struct PanelView: View {
                 Button { store.refresh() } label: { Image(systemName: "arrow.clockwise") }
                     .help("Refresh both subscriptions")
                     .accessibilityLabel("Refresh both subscriptions")
-                    .disabled(store.states.values.contains { $0.loading })
+                    .disabled(store.isLoading)
                 Button { store.showingSettings.toggle() } label: { Image(systemName: "gearshape") }
                     .help("Keyboard shortcut settings")
                     .accessibilityLabel("Keyboard shortcut settings")
             }
-            ForEach(Service.allCases) { service in
-                provider(service, state: store.states[service] ?? UsageState())
+            ForEach(store.providers) { provider in
+                card(provider, state: store.states[provider.id] ?? UsageState())
             }
             if store.showingSettings {
                 Divider()
@@ -47,25 +47,34 @@ struct PanelView: View {
         .frame(width: 380)
     }
 
-    private func provider(_ service: Service, state: UsageState) -> some View {
+    private func card(_ provider: Provider, state: UsageState) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 HStack(spacing: 6) {
-                    Text(service.rawValue).font(.headline)
-                    Image(nsImage: Bundle.module.image(forResource: NSImage.Name(service.rawValue))!)
-                        .renderingMode(service == .codex ? .template : .original)
+                    Text(provider.name).font(.headline)
+                    Image(nsImage: Bundle.module.image(forResource: NSImage.Name(provider.name))!)
+                        .renderingMode(provider.isClaude ? .original : .template)
                         .resizable()
                         .scaledToFill()
                         .frame(width: 18, height: 18)
                         .clipped()
                         .foregroundStyle(.primary)
                         .accessibilityHidden(true)
+                    if let detail = provider.detail {
+                        Text(detail).font(.subheadline).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+                    }
                 }
                 Spacer()
-                if state.loading { ProgressView().controlSize(.small).accessibilityLabel("Loading \(service.rawValue) usage") }
-                Link(destination: service.dashboard) { Image(systemName: "arrow.up.right.square") }
-                    .help("Open \(service.rawValue) usage dashboard")
-                    .accessibilityLabel("Open \(service.rawValue) usage dashboard")
+                if state.loading {
+                    ProgressView().controlSize(.small).accessibilityLabel("Loading \(provider.label) usage")
+                } else if let date = state.updatedAt, state.error == nil {
+                    Text(date.formatted(date: .omitted, time: .standard))
+                        .font(.caption2).monospacedDigit().foregroundStyle(.secondary)
+                        .help("Last checked")
+                }
+                Link(destination: provider.dashboard) { Image(systemName: "arrow.up.right.square") }
+                    .help("Open \(provider.name) usage dashboard")
+                    .accessibilityLabel("Open \(provider.name) usage dashboard")
             }
             ForEach(state.windows) { window in
                 VStack(alignment: .leading, spacing: 4) {
@@ -78,8 +87,8 @@ struct PanelView: View {
                     }.font(.subheadline)
                     if let percent = window.usedPercent {
                         ProgressView(value: percent, total: 100)
-                            .tint(service == .claude ? Color(red: 217.0 / 255, green: 119.0 / 255, blue: 87.0 / 255) : .blue)
-                            .accessibilityLabel("\(service.rawValue), \(window.id)")
+                            .tint(provider.isClaude ? Color(red: 217.0 / 255, green: 119.0 / 255, blue: 87.0 / 255) : .blue)
+                            .accessibilityLabel("\(provider.label), \(window.id)")
                             .accessibilityValue("\(Int(percent.rounded())) percent used")
                     }
                     if let reset = window.resetsAt {
@@ -91,10 +100,10 @@ struct PanelView: View {
             if let error = state.error {
                 Text(error).font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
             }
-            if let date = state.updatedAt {
-                Text("\(state.error == nil ? "Checked" : "Last successful check") \(date.formatted(date: .omitted, time: .standard))")
+            if let date = state.updatedAt, state.error != nil {
+                Text("Last successful check \(date.formatted(date: .omitted, time: .standard))")
                     .font(.caption2).foregroundStyle(.secondary)
-            } else if state.loading {
+            } else if state.loading && state.updatedAt == nil {
                 Text("Checking subscription…").font(.caption).foregroundStyle(.secondary)
             }
         }

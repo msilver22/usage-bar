@@ -62,8 +62,39 @@ public enum UsageParser {
             let utilization: Double
             let resets_at: String?
         }
+        /// Newer, open-ended list of limits; model-scoped weekly limits (e.g. Fable) only appear here.
+        struct Limit: Decodable {
+            struct Scope: Decodable {
+                struct Model: Decodable { let display_name: String? }
+                let model: Model?
+            }
+            let kind: String
+            let percent: Double?
+            let resets_at: String?
+            let scope: Scope?
+        }
         let five_hour: Window?
         let seven_day: Window?
+        let limits: [Limit]?
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            five_hour = try container.decodeIfPresent(Window.self, forKey: .five_hour)
+            seven_day = try container.decodeIfPresent(Window.self, forKey: .seven_day)
+            // Undocumented and evolving: an unexpected shape drops the extra rows, not the whole reading.
+            limits = try? container.decodeIfPresent([Limit].self, forKey: .limits)
+        }
+        private enum CodingKeys: String, CodingKey { case five_hour, seven_day, limits }
+    }
+
+    private static func claudeDate(_ value: String?) throws -> Date? {
+        guard let value else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        guard let date = formatter.date(from: value) ?? ISO8601DateFormatter().date(from: value) else {
+            throw UsageError.message("Claude returned an invalid reset time.")
+        }
+        return date
     }
 
     public static func claude(_ data: Data) throws -> [UsageWindow] {
@@ -71,15 +102,13 @@ public enum UsageParser {
         guard response.five_hour != nil || response.seven_day != nil else {
             throw UsageError.message("Claude returned no supported subscription usage windows.")
         }
-        return try [("5 hours", response.five_hour), ("Week", response.seven_day)].map { label, window in
-            let reset: Date?
-            if let value = window?.resets_at {
-                let formatter = ISO8601DateFormatter()
-                formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-                reset = formatter.date(from: value) ?? ISO8601DateFormatter().date(from: value)
-                guard reset != nil else { throw UsageError.message("Claude returned an invalid reset time.") }
-            } else { reset = nil }
-            return try UsageWindow(id: label, usedPercent: window?.utilization, resetsAt: reset)
+        let overall = try [("5 hours", response.five_hour), ("Week", response.seven_day)].map { label, window in
+            try UsageWindow(id: label, usedPercent: window?.utilization, resetsAt: claudeDate(window?.resets_at))
         }
+        let modelWeeks = try (response.limits ?? []).compactMap { limit -> UsageWindow? in
+            guard limit.kind == "weekly_scoped", let model = limit.scope?.model?.display_name, !model.isEmpty else { return nil }
+            return try UsageWindow(id: "\(model) · Week", usedPercent: limit.percent, resetsAt: claudeDate(limit.resets_at))
+        }
+        return overall + modelWeeks
     }
 }

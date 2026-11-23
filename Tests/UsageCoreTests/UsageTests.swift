@@ -28,6 +28,43 @@ import Testing
     #expect(windows[1].usedPercent == 0)
 }
 
+@Test func claudeAddsModelScopedWeeklyLimits() throws {
+    let windows = try UsageParser.claude(Data(#"""
+    {"five_hour":{"utilization":3,"resets_at":null},"seven_day":{"utilization":64,"resets_at":null},
+     "limits":[{"kind":"session","percent":3,"resets_at":null,"scope":null},
+               {"kind":"weekly_scoped","percent":45,"resets_at":"2026-11-23T08:59:59.843025+00:00",
+                "scope":{"model":{"id":null,"display_name":"Fable"},"surface":null}}]}
+    """#.utf8))
+    #expect(windows.map(\.id) == ["5 hours", "Week", "Fable · Week"])
+    #expect(windows[2].usedPercent == 45)
+    #expect(windows[2].resetsAt != nil)
+}
+
+@Test func unexpectedClaudeLimitsShapeKeepsOverallWindows() throws {
+    let windows = try UsageParser.claude(Data(#"{"five_hour":{"utilization":3},"seven_day":null,"limits":{"surprise":true}}"#.utf8))
+    #expect(windows.map(\.id) == ["5 hours", "Week"])
+}
+
+@Test func claudeKeychainServicePerConfigDirectory() {
+    #expect(ClaudeAccount.keychainService(configDir: nil) == "Claude Code-credentials")
+    #expect(ClaudeAccount.keychainService(configDir: "/Users/example/.claude-work")
+            == "Claude Code-credentials-" + String(sha256Hex("/Users/example/.claude-work").prefix(8)))
+}
+
+private func sha256Hex(_ string: String) -> String {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/shasum")
+    process.arguments = ["-a", "256"]
+    let input = Pipe(), output = Pipe()
+    process.standardInput = input
+    process.standardOutput = output
+    try? process.run()
+    input.fileHandleForWriting.write(Data(string.utf8))
+    try? input.fileHandleForWriting.close()
+    process.waitUntilExit()
+    return String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+}
+
 @Test func malformedPayloadsFailClearly() {
     #expect(throws: (any Error).self) { try UsageParser.codex(Data("{}".utf8)) }
     #expect(throws: (any Error).self) { try UsageParser.claude(Data("{}".utf8)) }

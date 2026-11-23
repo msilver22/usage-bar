@@ -2,12 +2,47 @@ import Foundation
 import Combine
 import UsageCore
 
-enum Service: String, CaseIterable, Identifiable {
-    case claude = "Claude"
-    case codex = "Codex"
-    var id: String { rawValue }
+/// One usage card: a Claude login (one per organization/config directory) or Codex.
+struct Provider: Identifiable, Hashable, Sendable {
+    enum Kind: Hashable, Sendable {
+        case claude(ClaudeAccount)
+        case codex
+    }
+    let kind: Kind
+
+    var id: String {
+        switch kind {
+        case .claude(let account): "claude:\(account.id)"
+        case .codex: "codex"
+        }
+    }
+    var isClaude: Bool { kind != .codex }
+    var name: String { isClaude ? "Claude" : "Codex" }
+    /// Organization name for Claude logins, shown next to the provider name.
+    var detail: String? {
+        if case .claude(let account) = kind { return account.organization }
+        return nil
+    }
+    var label: String { [name, detail].compactMap { $0 }.joined(separator: " · ") }
     var dashboard: URL {
-        URL(string: self == .claude ? "https://claude.ai/settings/usage" : "https://chatgpt.com/codex/settings/usage")!
+        URL(string: isClaude ? "https://claude.ai/settings/usage" : "https://chatgpt.com/codex/settings/usage")!
+    }
+
+    func fetch() async throws -> [UsageWindow] {
+        switch kind {
+        case .claude(let account): try await ClaudeUsage.fetch(account: account)
+        case .codex: try await CodexUsage.fetch()
+        }
+    }
+
+    /// Every Claude login found on this Mac, then Codex. With no Claude login at all, the default
+    /// account is still listed so its card can explain how to sign in.
+    static func discover() -> [Provider] {
+        var accounts = ClaudeAccount.discover()
+        if accounts.isEmpty {
+            accounts = [ClaudeAccount(keychainService: ClaudeAccount.keychainService(configDir: nil), organization: nil)]
+        }
+        return accounts.map { Provider(kind: .claude($0)) } + [Provider(kind: .codex)]
     }
 }
 
@@ -20,34 +55,51 @@ struct UsageState {
 
 @MainActor
 final class UsageStore: ObservableObject {
-    @Published var states = Dictionary(uniqueKeysWithValues: Service.allCases.map { ($0, UsageState()) })
+    @Published private(set) var providers = Provider.discover()
+    @Published var states: [String: UsageState] = [:]
     @Published var showingSettings = false
-    private var tasks: [Service: Task<Void, Never>] = [:]
+    private var discovery: Task<Void, Never>?
+    private var tasks: [String: Task<Void, Never>] = [:]
 
+    var isLoading: Bool { states.values.contains { $0.loading } }
+
+    /// Re-discovers logins (so a new `claude /login` in another config directory shows up), then
+    /// checks every provider in parallel.
     func refresh() {
         cancel()
-        for service in Service.allCases {
-            states[service]?.loading = true
-            states[service]?.error = nil
-            tasks[service] = Task {
-                do {
-                    let windows = try await (service == .claude ? ClaudeUsage.fetch() : CodexUsage.fetch())
-                    guard !Task.isCancelled else { return }
-                    states[service] = UsageState(windows: windows, updatedAt: Date())
-                } catch {
-                    guard !Task.isCancelled else { return }
-                    states[service]?.loading = false
-                    states[service]?.error = error is DecodingError
-                        ? "The service returned an unsupported usage format."
-                        : error.localizedDescription
-                }
+        for provider in providers { states[provider.id, default: UsageState()].loading = true }
+        discovery = Task {
+            let found = await Task.detached { Provider.discover() }.value
+            guard !Task.isCancelled else { return }
+            providers = found
+            states = states.filter { key, _ in found.contains { $0.id == key } }
+            for provider in found { start(provider) }
+        }
+    }
+
+    private func start(_ provider: Provider) {
+        states[provider.id, default: UsageState()].loading = true
+        states[provider.id]?.error = nil
+        tasks[provider.id] = Task {
+            do {
+                let windows = try await provider.fetch()
+                guard !Task.isCancelled else { return }
+                states[provider.id] = UsageState(windows: windows, updatedAt: Date())
+            } catch {
+                guard !Task.isCancelled else { return }
+                states[provider.id]?.loading = false
+                states[provider.id]?.error = error is DecodingError
+                    ? "The service returned an unsupported usage format."
+                    : error.localizedDescription
             }
         }
     }
 
     func cancel() {
+        discovery?.cancel()
+        discovery = nil
         tasks.values.forEach { $0.cancel() }
         tasks.removeAll()
-        for service in Service.allCases { states[service]?.loading = false }
+        for key in states.keys { states[key]?.loading = false }
     }
 }
