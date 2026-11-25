@@ -43,7 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let image = NSImage(systemSymbolName: "chart.bar.xaxis", accessibilityDescription: "UsageBar")
             image?.isTemplate = true
             button.image = image
-            button.toolTip = "UsageBar — Claude and Codex usage"
+            button.toolTip = "UsageBar — Claude, Codex, and Antigravity usage"
             button.target = self
             button.action = #selector(togglePanel)
             button.setAccessibilityLabel("UsageBar")

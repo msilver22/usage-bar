@@ -2,11 +2,12 @@ import Foundation
 import Combine
 import UsageCore
 
-/// One usage card: a Claude login (one per organization/config directory) or Codex.
+/// One usage card: a Claude login (one per organization/config directory), Codex, or Antigravity.
 struct Provider: Identifiable, Hashable, Sendable {
     enum Kind: Hashable, Sendable {
         case claude(ClaudeAccount)
         case codex
+        case antigravity
     }
     let kind: Kind
 
@@ -14,10 +15,16 @@ struct Provider: Identifiable, Hashable, Sendable {
         switch kind {
         case .claude(let account): "claude:\(account.id)"
         case .codex: "codex"
+        case .antigravity: "antigravity"
         }
     }
-    var isClaude: Bool { kind != .codex }
-    var name: String { isClaude ? "Claude" : "Codex" }
+    var name: String {
+        switch kind {
+        case .claude: "Claude"
+        case .codex: "Codex"
+        case .antigravity: "Antigravity"
+        }
+    }
     /// Organization name for Claude logins, shown next to the provider name.
     var detail: String? {
         if case .claude(let account) = kind { return account.organization }
@@ -25,24 +32,29 @@ struct Provider: Identifiable, Hashable, Sendable {
     }
     var label: String { [name, detail].compactMap { $0 }.joined(separator: " · ") }
     var dashboard: URL {
-        URL(string: isClaude ? "https://claude.ai/settings/usage" : "https://chatgpt.com/codex/settings/usage")!
+        switch kind {
+        case .claude: URL(string: "https://claude.ai/settings/usage")!
+        case .codex: URL(string: "https://chatgpt.com/codex/settings/usage")!
+        case .antigravity: URL(string: "https://antigravity.google")!
+        }
     }
 
     func fetch() async throws -> [UsageWindow] {
         switch kind {
         case .claude(let account): try await ClaudeUsage.fetch(account: account)
         case .codex: try await CodexUsage.fetch()
+        case .antigravity: try await AntigravityUsage.fetch()
         }
     }
 
-    /// Every Claude login found on this Mac, then Codex. With no Claude login at all, the default
-    /// account is still listed so its card can explain how to sign in.
+    /// Every Claude login found on this Mac, then Codex and Antigravity. With no Claude login at all,
+    /// the default account is still listed so its card can explain how to sign in.
     static func discover() -> [Provider] {
         var accounts = ClaudeAccount.discover()
         if accounts.isEmpty {
             accounts = [ClaudeAccount(keychainService: ClaudeAccount.keychainService(configDir: nil), organization: nil)]
         }
-        return accounts.map { Provider(kind: .claude($0)) } + [Provider(kind: .codex)]
+        return accounts.map { Provider(kind: .claude($0)) } + [Provider(kind: .codex), Provider(kind: .antigravity)]
     }
 }
 

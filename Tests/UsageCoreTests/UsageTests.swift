@@ -16,6 +16,17 @@ import Testing
     #expect(windows[0].usedPercent == 0)
 }
 
+@Test func codexParsesBusinessIndividualLimit() throws {
+    let windows = try UsageParser.codex(Data(#"""
+    {"rateLimits":{"primary":null,"secondary":null,"planType":"business",
+     "individualLimit":{"limit":"750","used":"213.56","remainingPercent":72,"resetsAt":1797120000}}}
+    """#.utf8))
+    #expect(windows.count == 1)
+    #expect(windows[0].id == "Usage limit · 214 / 750")
+    #expect(windows[0].usedPercent == 28)
+    #expect(windows[0].resetsAt == Date(timeIntervalSince1970: 1797120000))
+}
+
 @Test func claudeParsesBothTimestampFormats() throws {
     let windows = try UsageParser.claude(Data(#"{"five_hour":{"utilization":12.5,"resets_at":"2026-10-19T18:00:00.123Z"},"seven_day":{"utilization":80,"resets_at":"2026-10-22T12:00:00Z"}}"#.utf8))
     #expect(windows.map(\.usedPercent) == [12.5, 80])
@@ -75,7 +86,58 @@ private func sha256Hex(_ string: String) -> String {
         try UsageParser.codex(Data(#"{"rateLimits":{"primary":{"usedPercent":-1}}}"#.utf8))
     }
     #expect(throws: (any Error).self) {
+        try UsageParser.codex(Data(#"{"rateLimits":{"individualLimit":{"limit":"750","used":"10","remainingPercent":101}}}"#.utf8))
+    }
+    #expect(throws: (any Error).self) {
         try UsageParser.claude(Data(#"{"five_hour":{"utilization":101}}"#.utf8))
+    }
+    #expect(throws: (any Error).self) {
+        try UsageParser.antigravity(Data(#"{"status":"ERROR","command":{"name":"usage","data":{"groups":[]}}}"#.utf8))
+    }
+    #expect(throws: (any Error).self) {
+        try UsageParser.antigravity(Data(#"{"status":"SUCCESS","command":{"name":"usage","data":{"groups":[{"name":"Gemini Models","buckets":[{"window":"5h","remaining_fraction":1.2}]}]}}}"#.utf8))
+    }
+}
+
+@Test func antigravityParsesModelGroupsAndOrdersFiveHourFirst() throws {
+    let windows = try UsageParser.antigravity(Data(#"""
+    {"status":"SUCCESS","command":{"name":"usage","data":{"groups":[
+      {"name":"Gemini Models","buckets":[
+        {"id":"gemini-weekly","window":"weekly","remaining_fraction":0.97,"reset_time":"2026-12-01T09:34:55Z"},
+        {"id":"gemini-5h","window":"5h","remaining_fraction":0.985,"reset_time":"2026-11-25T21:18:56Z"}
+      ]},
+      {"name":"Claude and GPT models","buckets":[
+        {"id":"3p-weekly","window":"weekly","remaining_fraction":1,"reset_time":"2026-12-02T17:05:22Z"},
+        {"id":"3p-5h","window":"5h","remaining_fraction":0.6,"reset_time":"2026-11-25T22:05:22Z"}
+      ]}
+    ]}}}
+    """#.utf8))
+    #expect(windows.map(\.id) == ["Gemini · 5 hours", "Gemini · Week", "Claude and GPT · 5 hours", "Claude and GPT · Week"])
+    #expect(abs((windows[0].usedPercent ?? -1) - 1.5) < 0.001)
+    #expect(abs((windows[1].usedPercent ?? -1) - 3.0) < 0.001)
+    #expect(abs((windows[2].usedPercent ?? -1) - 40.0) < 0.001)
+    #expect(windows[3].usedPercent == 0)
+    #expect(windows.allSatisfy { $0.resetsAt != nil })
+}
+
+@Test func antigravitySessionRunsUsageAndBlocksBrowserAndTimeout() throws {
+    try withExecutable("""
+    test "$AGY_CLI_DISABLE_AUTO_UPDATE" = "true" || exit 2
+    test "$BROWSER" = "/usr/bin/false" || exit 3
+    if open https://example.com >/dev/null 2>&1; then exit 4; fi
+    printf '%s\\n' '{"status":"SUCCESS","command":{"name":"usage","data":{"groups":[{"name":"Gemini Models","buckets":[{"window":"5h","remaining_fraction":0.75}]}]}}}'
+    """) { path in
+        let windows = try AntigravitySession(executable: path, timeoutSeconds: 2).fetch()
+        #expect(windows.map(\.id) == ["Gemini · 5 hours"])
+        #expect(windows[0].usedPercent == 25)
+    }
+    try withExecutable("exec /bin/sleep 10\n") { path in
+        let start = Date()
+        #expect(throws: (any Error).self) { try AntigravitySession(executable: path, timeoutSeconds: 0.1).fetch() }
+        #expect(Date().timeIntervalSince(start) < 2)
+        let cancelled = AntigravitySession(executable: path)
+        cancelled.stop(cancelled: true)
+        #expect(throws: CancellationError.self) { try cancelled.fetch() }
     }
 }
 

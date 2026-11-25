@@ -16,8 +16,8 @@ struct PanelView: View {
                 }
                 Spacer()
                 Button { store.refresh() } label: { Image(systemName: "arrow.clockwise") }
-                    .help("Refresh both subscriptions")
-                    .accessibilityLabel("Refresh both subscriptions")
+                    .help("Refresh all subscriptions")
+                    .accessibilityLabel("Refresh all subscriptions")
                     .disabled(store.isLoading)
                 Button { store.showingSettings.toggle() } label: { Image(systemName: "gearshape") }
                     .help("Keyboard shortcut settings")
@@ -52,14 +52,21 @@ struct PanelView: View {
             HStack {
                 HStack(spacing: 6) {
                     Text(provider.name).font(.headline)
-                    Image(nsImage: Bundle.module.image(forResource: NSImage.Name(provider.name))!)
-                        .renderingMode(provider.isClaude ? .original : .template)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: 18, height: 18)
-                        .clipped()
-                        .foregroundStyle(.primary)
-                        .accessibilityHidden(true)
+                    if let image = Bundle.module.image(forResource: NSImage.Name(provider.name)) {
+                        Image(nsImage: image)
+                            .renderingMode(provider.kind == .codex ? .template : .original)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: 18, height: 18)
+                            .clipped()
+                            .foregroundStyle(.primary)
+                            .accessibilityHidden(true)
+                    } else {
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 15))
+                            .foregroundStyle(tint(for: provider))
+                            .accessibilityHidden(true)
+                    }
                     if let detail = provider.detail {
                         Text(detail).font(.subheadline).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
                     }
@@ -87,7 +94,7 @@ struct PanelView: View {
                     }.font(.subheadline)
                     if let percent = window.usedPercent {
                         ProgressView(value: percent, total: 100)
-                            .tint(provider.isClaude ? Color(red: 217.0 / 255, green: 119.0 / 255, blue: 87.0 / 255) : .blue)
+                            .tint(tint(for: provider))
                             .accessibilityLabel("\(provider.label), \(window.id)")
                             .accessibilityValue("\(Int(percent.rounded())) percent used")
                     }
@@ -109,5 +116,13 @@ struct PanelView: View {
         }
         .padding(12)
         .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func tint(for provider: Provider) -> Color {
+        switch provider.kind {
+        case .claude: Color(red: 217.0 / 255, green: 119.0 / 255, blue: 87.0 / 255)
+        case .codex: .blue
+        case .antigravity: .indigo
+        }
     }
 }
