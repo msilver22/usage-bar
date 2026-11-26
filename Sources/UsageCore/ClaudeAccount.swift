@@ -8,11 +8,14 @@ public struct ClaudeAccount: Sendable, Hashable, Identifiable {
     public let keychainService: String
     /// Organization name recorded by Claude Code at login, if available.
     public let organization: String?
+    /// Custom `CLAUDE_CONFIG_DIR` path for non-default logins (`nil` for `~/.claude`).
+    public let configDir: String?
     public var id: String { keychainService }
 
-    public init(keychainService: String, organization: String?) {
+    public init(keychainService: String, organization: String?, configDir: String? = nil) {
         self.keychainService = keychainService
         self.organization = organization
+        self.configDir = configDir
     }
 
     /// Claude Code names the item `Claude Code-credentials` for the default config directory and
@@ -35,7 +38,8 @@ public struct ClaudeAccount: Sendable, Hashable, Identifiable {
             var isDirectory: ObjCBool = false
             guard FileManager.default.fileExists(atPath: dir.path, isDirectory: &isDirectory), isDirectory.boolValue else { continue }
             accounts.append(ClaudeAccount(keychainService: keychainService(configDir: dir.path),
-                                          organization: organization(in: dir.appendingPathComponent(".claude.json"))))
+                                          organization: organization(in: dir.appendingPathComponent(".claude.json")),
+                                          configDir: dir.path))
         }
         return accounts.filter { hasCredentials($0.keychainService) }
     }

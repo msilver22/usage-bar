@@ -62,6 +62,29 @@ import Testing
             == "Claude Code-credentials-" + String(sha256Hex("/Users/example/.claude-work").prefix(8)))
 }
 
+@Test func claudeRefreshSessionPassesConfigDirAndRespectsTimeoutAndCancellation() throws {
+    let marker = FileManager.default.temporaryDirectory.appendingPathComponent("claude-refresh-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: marker) }
+    try withExecutable("""
+    test "$1" = "doctor" || exit 2
+    test "$DISABLE_AUTOUPDATER" = "1" || exit 3
+    printf '%s' "${CLAUDE_CONFIG_DIR:-DEFAULT}" > "\(marker.path)"
+    """) { path in
+        try ClaudeRefreshSession(executable: path, configDir: "/tmp/custom-claude", timeoutSeconds: 2).run()
+        #expect(try String(contentsOf: marker, encoding: .utf8) == "/tmp/custom-claude")
+        try ClaudeRefreshSession(executable: path, configDir: nil, timeoutSeconds: 2).run()
+        #expect(try String(contentsOf: marker, encoding: .utf8) == "DEFAULT")
+    }
+    try withExecutable("exec /bin/sleep 10\n") { path in
+        let start = Date()
+        try ClaudeRefreshSession(executable: path, configDir: nil, timeoutSeconds: 0.1).run()
+        #expect(Date().timeIntervalSince(start) < 2)
+        let cancelled = ClaudeRefreshSession(executable: path, configDir: nil)
+        cancelled.stop()
+        #expect(throws: CancellationError.self) { try cancelled.run() }
+    }
+}
+
 private func sha256Hex(_ string: String) -> String {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/shasum")
