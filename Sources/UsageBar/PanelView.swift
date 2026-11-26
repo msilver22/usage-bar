@@ -3,6 +3,7 @@ import UsageCore
 
 struct PanelView: View {
     @ObservedObject var store: UsageStore
+    @ObservedObject var updater: UpdateStore
     @Binding var shortcut: ShortcutChoice
     let shortcutError: String?
 
@@ -20,8 +21,32 @@ struct PanelView: View {
                     .accessibilityLabel("Refresh all subscriptions")
                     .disabled(store.isLoading)
                 Button { store.showingSettings.toggle() } label: { Image(systemName: "gearshape") }
-                    .help("Keyboard shortcut settings")
-                    .accessibilityLabel("Keyboard shortcut settings")
+                    .help("Settings")
+                    .accessibilityLabel("Settings")
+            }
+            if let update = updater.availableUpdate {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.down.circle.fill").foregroundStyle(.tint)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Update available").font(.caption).fontWeight(.medium)
+                        Text("main · \(update.shortRemoteCommit)")
+                            .font(.caption2).monospaced().foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if updater.isUpdating {
+                        ProgressView().controlSize(.small)
+                        Text("Updating…").font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Button("Update") { updater.applyUpdate() }
+                            .controlSize(.small)
+                            .accessibilityLabel("Pull latest main and restart UsageBar")
+                    }
+                }
+                .padding(10)
+                .background(.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+            }
+            if let updateError = updater.error {
+                Text(updateError).font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
             }
             ForEach(store.providers) { provider in
                 card(provider, state: store.states[provider.id] ?? UsageState())
@@ -32,6 +57,23 @@ struct PanelView: View {
                     ForEach(ShortcutChoice.allCases) { choice in Text(choice.rawValue).tag(choice) }
                 }
                 if let shortcutError { Text(shortcutError).font(.caption).foregroundStyle(.red) }
+                if updater.isConfigured {
+                    Toggle("Auto-update from main", isOn: $updater.autoUpdate)
+                        .font(.caption)
+                    HStack {
+                        Button(updater.isChecking ? "Checking…" : "Check for updates") { updater.checkNow() }
+                            .controlSize(.small)
+                            .disabled(updater.isChecking || updater.isUpdating)
+                        Spacer()
+                        if let commit = updater.builtCommit {
+                            Text(updater.availableUpdate == nil && updater.lastCheckedAt != nil
+                                 ? "Up to date · \(commit.prefix(7))"
+                                 : String(commit.prefix(7)))
+                                .font(.caption2).monospaced().foregroundStyle(.secondary)
+                                .help("Installed commit")
+                        }
+                    }
+                }
             } else if let shortcutError {
                 Text(shortcutError).font(.caption).foregroundStyle(.red)
             }

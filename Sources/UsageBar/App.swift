@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 import UsageCore
 
@@ -31,8 +32,11 @@ struct UsageBarMain {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let store = UsageStore()
+    private let updater = UpdateStore()
     private let panel = UsagePanel()
     private var statusItem: NSStatusItem!
+    private var updateBadge: CALayer?
+    private var updateSubscription: AnyCancellable?
     private var hotKey: GlobalShortcut!
     private var shortcut = ShortcutChoice(rawValue: UserDefaults.standard.string(forKey: "shortcut") ?? "") ?? .controlOptionU
     private var shortcutError: String?
@@ -47,6 +51,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.target = self
             button.action = #selector(togglePanel)
             button.setAccessibilityLabel("UsageBar")
+            button.wantsLayer = true
+            let dot = CALayer()
+            dot.backgroundColor = NSColor.controlAccentColor.cgColor
+            dot.cornerRadius = 3
+            dot.isHidden = true
+            button.layer?.addSublayer(dot)
+            updateBadge = dot
         }
         panel.onClose = { [weak self] in
             self?.store.cancel()
@@ -56,7 +67,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !hotKey.register(shortcut) {
             shortcutError = "\(shortcut.rawValue) is unavailable. Choose another shortcut in Settings."
         }
+        updater.isPanelOpen = { [weak self] in self?.panel.isOpen ?? false }
+        updateSubscription = updater.$availableUpdate.sink { [weak self] update in
+            self?.updateStatusBadge(hasUpdate: update != nil)
+        }
+        updater.startMonitoring()
         updateContent()
+    }
+
+    private func updateStatusBadge(hasUpdate: Bool) {
+        guard let button = statusItem.button else { return }
+        button.toolTip = hasUpdate
+            ? "UsageBar — Update available on main"
+            : "UsageBar — Claude, Codex, and Antigravity usage"
+        updateBadge?.isHidden = !hasUpdate
+        if hasUpdate {
+            let y: CGFloat = button.isFlipped ? 3 : button.bounds.height - 9
+            updateBadge?.frame = CGRect(x: max(button.bounds.width - 8, 12), y: y, width: 6, height: 6)
+        }
     }
 
     private func updateContent() {
@@ -71,7 +99,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             self.updateContent()
         })
-        panel.setContent(PanelView(store: store, shortcut: selection, shortcutError: shortcutError))
+        panel.setContent(PanelView(store: store, updater: updater, shortcut: selection, shortcutError: shortcutError))
     }
 
     @objc private func togglePanel() {
@@ -80,7 +108,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.show(below: window.convertToScreen(button.convert(button.bounds, to: nil)), on: window.screen)
         button.highlight(true)
         store.refresh()
+        updater.checkIfStale()
     }
 
-    func applicationWillTerminate(_ notification: Notification) { store.cancel() }
+    func applicationWillTerminate(_ notification: Notification) {
+        store.cancel()
+        updater.stop()
+    }
 }

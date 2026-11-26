@@ -8,5 +8,9 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$bin_dir/UsageBar" "$app/Contents/MacOS/UsageBar"
 cp -R "$bin_dir/UsageBar_UsageBar.bundle" "$app/Contents/Resources/"
 cp scripts/Info.plist "$app/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Add :UsageBarRepoPath string $PWD" "$app/Contents/Info.plist"
+if git_commit="$(git rev-parse HEAD 2>/dev/null)"; then
+    /usr/libexec/PlistBuddy -c "Add :UsageBarGitCommit string $git_commit" "$app/Contents/Info.plist"
+fi
 codesign --force --sign - "$app"
 echo "Built $PWD/$app"

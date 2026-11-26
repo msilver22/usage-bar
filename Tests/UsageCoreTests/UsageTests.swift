@@ -234,3 +234,64 @@ private func withExecutable(_ body: String, run: (String) throws -> Void) throws
         }
     }
 }
+
+@Test func appUpdaterDetectsRemoteCommitsAndRespectsLocalCommits() throws {
+    #expect(AppUpdater.parseRemoteCommit("afba3a0123456789\trefs/heads/main\n") == "afba3a0123456789")
+    #expect(AppUpdater.parseRemoteCommit("not-a-sha refs/heads/main") == nil)
+    #expect(AppUpdater.parseRemoteCommit("") == nil)
+
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("usagebar-git-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    func git(_ args: [String], in dir: URL = root) throws -> String {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        p.arguments = args
+        p.currentDirectoryURL = dir
+        let out = Pipe()
+        p.standardOutput = out
+        p.standardError = FileHandle.nullDevice
+        try p.run()
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        guard p.terminationStatus == 0 else { throw UsageError.message("git \(args.joined(separator: " ")) failed") }
+        return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    let remote = root.appendingPathComponent("remote.git")
+    let local = root.appendingPathComponent("local")
+    let upstream = root.appendingPathComponent("upstream")
+    _ = try git(["init", "--bare", remote.path])
+    _ = try git(["clone", remote.path, local.path])
+    _ = try git(["checkout", "-b", "main"], in: local)
+    _ = try git(["config", "user.email", "test@example.com"], in: local)
+    _ = try git(["config", "user.name", "Test"], in: local)
+    try "v1".write(to: local.appendingPathComponent("file.txt"), atomically: true, encoding: .utf8)
+    _ = try git(["add", "."], in: local)
+    _ = try git(["commit", "-m", "init"], in: local)
+    _ = try git(["push", "-u", "origin", "main"], in: local)
+    let v1 = try git(["rev-parse", "HEAD"], in: local)
+
+    // Exact match with origin/main is up to date.
+    #expect(try AppUpdater.check(repoPath: local.path, builtCommit: v1) == .upToDate)
+
+    // Local commit ahead of origin/main is still up to date.
+    try "local".write(to: local.appendingPathComponent("local.txt"), atomically: true, encoding: .utf8)
+    _ = try git(["add", "."], in: local)
+    _ = try git(["commit", "-m", "local feature"], in: local)
+    let localHead = try git(["rev-parse", "HEAD"], in: local)
+    #expect(try AppUpdater.check(repoPath: local.path, builtCommit: localHead) == .upToDate)
+
+    // A new upstream commit on origin/main triggers an available update.
+    _ = try git(["clone", "-b", "main", remote.path, upstream.path])
+    _ = try git(["config", "user.email", "test@example.com"], in: upstream)
+    _ = try git(["config", "user.name", "Test"], in: upstream)
+    try "v2".write(to: upstream.appendingPathComponent("file.txt"), atomically: true, encoding: .utf8)
+    _ = try git(["add", "."], in: upstream)
+    _ = try git(["commit", "-m", "upstream v2"], in: upstream)
+    _ = try git(["push", "origin", "main"], in: upstream)
+    let v2 = try git(["rev-parse", "HEAD"], in: upstream)
+
+    #expect(try AppUpdater.check(repoPath: local.path, builtCommit: localHead) == .available(UpdateInfo(currentCommit: localHead, remoteCommit: v2)))
+}
