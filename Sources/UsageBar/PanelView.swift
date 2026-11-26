@@ -88,7 +88,14 @@ struct PanelView: View {
                     HStack {
                         Text(window.id).foregroundStyle(.secondary)
                         Spacer()
-                        if let percent = window.usedPercent {
+                        if window.exceedsLimit, let reported = window.reportedPercent {
+                            Label {
+                                Text("\(reported, specifier: "%.0f")% used").monospacedDigit()
+                            } icon: {
+                                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                            }
+                            .help("Usage is over the limit")
+                        } else if let percent = window.usedPercent {
                             Text("\(percent, specifier: "%.0f")% used").monospacedDigit()
                         } else { Text("Unavailable").foregroundStyle(.secondary) }
                     }.font(.subheadline)
@@ -96,7 +103,9 @@ struct PanelView: View {
                         ProgressView(value: percent, total: 100)
                             .tint(tint(for: provider))
                             .accessibilityLabel("\(provider.label), \(window.id)")
-                            .accessibilityValue("\(Int(percent.rounded())) percent used")
+                            .accessibilityValue(window.exceedsLimit
+                                ? "\(Int((window.reportedPercent ?? percent).rounded())) percent used, over the limit"
+                                : "\(Int(percent.rounded())) percent used")
                     }
                     if let reset = window.resetsAt {
                         Text("Resets \(reset.formatted(date: .abbreviated, time: .shortened))")

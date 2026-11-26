@@ -2,15 +2,22 @@ import Foundation
 
 public struct UsageWindow: Identifiable, Sendable, Equatable {
     public let id: String
+    /// Usage clamped to 0…100, for progress bars.
     public let usedPercent: Double?
+    /// Usage as the service reported it, before the clamp.
+    public let reportedPercent: Double?
     public let resetsAt: Date?
+    /// The service reports usage over 100 % (for example, Claude extra usage).
+    public var exceedsLimit: Bool { (reportedPercent ?? 0) > 100 }
 
     public init(id: String, usedPercent: Double?, resetsAt: Date?) throws {
-        guard usedPercent.map({ $0.isFinite && (0...100).contains($0) }) ?? true else {
+        guard usedPercent.map(\.isFinite) ?? true else {
             throw UsageError.message("The service returned an invalid usage percentage.")
         }
         self.id = id
-        self.usedPercent = usedPercent
+        // Clamp: Claude can report over 100 % with extra usage, and remaining-fraction math can round below 0.
+        self.usedPercent = usedPercent.map { min(max($0, 0), 100) }
+        self.reportedPercent = usedPercent
         self.resetsAt = resetsAt
     }
 }

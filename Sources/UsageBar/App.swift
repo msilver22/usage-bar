@@ -11,7 +11,7 @@ struct UsageBarMain {
             for provider in Provider.discover() {
                 do {
                     for window in try await provider.fetch() {
-                        print("\(provider.label) · \(window.id): \(window.usedPercent.map { String($0) } ?? "unavailable")% used")
+                        print("\(provider.label) · \(window.id): \(window.reportedPercent.map { String($0) } ?? "unavailable")% used\(window.exceedsLimit ? " (over the limit)" : "")")
                     }
                 } catch {
                     failed = true
