@@ -106,20 +106,21 @@ private func sha256Hex(_ string: String) -> String {
         try UsageParser.claude(Data(#"{"five_hour":{"utilization":20,"resets_at":"tomorrow"}}"#.utf8))
     }
     #expect(throws: (any Error).self) {
-        try UsageParser.codex(Data(#"{"rateLimits":{"primary":{"usedPercent":-1}}}"#.utf8))
-    }
-    #expect(throws: (any Error).self) {
-        try UsageParser.codex(Data(#"{"rateLimits":{"individualLimit":{"limit":"750","used":"10","remainingPercent":101}}}"#.utf8))
-    }
-    #expect(throws: (any Error).self) {
-        try UsageParser.claude(Data(#"{"five_hour":{"utilization":101}}"#.utf8))
-    }
-    #expect(throws: (any Error).self) {
         try UsageParser.antigravity(Data(#"{"status":"ERROR","command":{"name":"usage","data":{"groups":[]}}}"#.utf8))
     }
-    #expect(throws: (any Error).self) {
-        try UsageParser.antigravity(Data(#"{"status":"SUCCESS","command":{"name":"usage","data":{"groups":[{"name":"Gemini Models","buckets":[{"window":"5h","remaining_fraction":1.2}]}]}}}"#.utf8))
-    }
+    #expect(throws: (any Error).self) { try UsageWindow(id: "x", usedPercent: .nan, resetsAt: nil) }
+    #expect(throws: (any Error).self) { try UsageWindow(id: "x", usedPercent: .infinity, resetsAt: nil) }
+}
+
+@Test func outOfRangePercentagesAreClampedNotRejected() throws {
+    #expect(try UsageParser.codex(Data(#"{"rateLimits":{"primary":{"usedPercent":-1}}}"#.utf8))[0].usedPercent == 0)
+    #expect(try UsageParser.codex(Data(#"{"rateLimits":{"individualLimit":{"limit":"750","used":"10","remainingPercent":101}}}"#.utf8))[0].usedPercent == 0)
+    let over = try UsageParser.claude(Data(#"{"five_hour":{"utilization":101}}"#.utf8))[0]
+    #expect(over.usedPercent == 100 && over.reportedPercent == 101 && over.exceedsLimit)
+    #expect(try !UsageWindow(id: "x", usedPercent: 100, resetsAt: nil).exceedsLimit)
+    #expect(try !UsageWindow(id: "x", usedPercent: -1, resetsAt: nil).exceedsLimit)
+    #expect(try UsageParser.antigravity(Data(#"{"status":"SUCCESS","command":{"name":"usage","data":{"groups":[{"name":"Gemini Models","buckets":[{"window":"5h","remaining_fraction":1.2}]}]}}}"#.utf8))[0].usedPercent == 0)
+    #expect(try UsageParser.antigravity(Data(#"{"status":"SUCCESS","command":{"name":"usage","data":{"groups":[{"name":"Gemini Models","buckets":[{"window":"5h","remaining_fraction":-0.05}]}]}}}"#.utf8))[0].usedPercent == 100)
 }
 
 @Test func antigravityParsesModelGroupsAndOrdersFiveHourFirst() throws {
