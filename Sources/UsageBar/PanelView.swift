@@ -44,7 +44,7 @@ struct PanelView: View {
             }
         }
         .padding(18)
-        .frame(width: 380)
+        .frame(maxWidth: .infinity)
     }
 
     private func card(_ provider: Provider, state: UsageState) -> some View {

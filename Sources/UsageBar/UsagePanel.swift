@@ -12,7 +12,9 @@ final class UsagePanel: NSPanel {
     private let hosting = NSHostingView(rootView: AnyView(EmptyView()))
     private var anchor: NSRect = .zero
     private var visibleFrame: NSRect?
+    private var contentHeight: CGFloat = 0
     private var outsideClickMonitor: Any?
+    private var screenObserver: NSObjectProtocol?
     private(set) var isOpen = false
     var onClose: (() -> Void)?
 
@@ -43,22 +45,37 @@ final class UsagePanel: NSPanel {
     override var canBecomeKey: Bool { true }
 
     func setContent(_ view: some View) {
-        hosting.rootView = AnyView(view
-            .fixedSize(horizontal: false, vertical: true)
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { [weak self] height in
-                self?.layout(height: height)
+        hosting.rootView = AnyView(
+            ScrollView(.vertical) {
+                view
+                    .fixedSize(horizontal: false, vertical: true)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { [weak self] height in
+                        self?.contentHeight = height
+                        if self?.isOpen == true { self?.layout() }
+                    }
             }
+            .scrollBounceBehavior(.basedOnSize)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top))
     }
 
     /// Shows the panel below `anchor`, a rect in screen coordinates.
     func show(below anchor: NSRect, on screen: NSScreen?) {
         self.anchor = anchor
-        visibleFrame = (screen ?? NSScreen.main)?.visibleFrame
-        layout(height: hosting.fittingSize.height)
+        let targetScreen = NSScreen.screens.first { $0.frame.contains(NSPoint(x: anchor.midX, y: anchor.midY)) }
+            ?? screen
+            ?? NSScreen.main
+        visibleFrame = targetScreen?.visibleFrame
+        layout()
         isOpen = true
         makeKeyAndOrderFront(nil)
         outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            MainActor.assumeIsolated { self?.close() }
+        }
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
             MainActor.assumeIsolated { self?.close() }
         }
     }
@@ -68,6 +85,8 @@ final class UsagePanel: NSPanel {
         isOpen = false
         if let outsideClickMonitor { NSEvent.removeMonitor(outsideClickMonitor) }
         outsideClickMonitor = nil
+        if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
+        screenObserver = nil
         super.close()
         onClose?()
     }
@@ -79,11 +98,14 @@ final class UsagePanel: NSPanel {
         close()
     }
 
-    private func layout(height: CGFloat) {
-        guard height > 0, let visibleFrame else { return }
+    private func layout() {
+        // NSHostingView.fittingSize is 0 when sizingOptions is empty, so use the measured SwiftUI height.
+        let targetHeight = contentHeight > 0 ? contentHeight : frame.height
+        guard targetHeight > 0, let visibleFrame else { return }
         let margin: CGFloat = 8
         let top = min(anchor.minY, visibleFrame.maxY) - 6
-        let height = min(height, top - visibleFrame.minY - margin)
+        let height = min(targetHeight, max(top - visibleFrame.minY - margin, 0))
+        guard height > 0 else { return }
         let x = min(max(anchor.midX - Self.width / 2, visibleFrame.minX + margin), visibleFrame.maxX - Self.width - margin)
         setFrame(NSRect(x: x, y: top - height, width: Self.width, height: height), display: true)
         invalidateShadow()
