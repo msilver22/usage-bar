@@ -18,37 +18,29 @@ public enum UpdateStatus: Equatable, Sendable {
 }
 
 public enum AppUpdater {
+    /// Checks `remoteURL` directly without touching TCC-protected folders like `~/Documents`.
     public static func check(
-        repoPath: String,
-        builtCommit: String,
-        remote: String = "origin",
+        remoteURL: String,
+        upstreamCommit: String,
         branch: String = "main",
         timeoutSeconds: TimeInterval = 15
     ) throws -> UpdateStatus {
         let lsRemote = try runProcess(
             executable: "/usr/bin/git",
-            arguments: ["-C", repoPath, "ls-remote", remote, "refs/heads/\(branch)"],
+            arguments: ["ls-remote", remoteURL, "refs/heads/\(branch)"],
+            workingDirectory: FileManager.default.temporaryDirectory,
             timeoutSeconds: timeoutSeconds,
             captureOutput: true
         )
         guard lsRemote.status == 0 else {
-            throw UsageError.message("Could not reach \(remote)/\(branch) to check for updates.")
+            throw UsageError.message("Could not reach \(branch) to check for updates.")
         }
         guard let remoteCommit = parseRemoteCommit(lsRemote.output) else {
-            throw UsageError.message("Could not read the latest commit on \(remote)/\(branch).")
+            throw UsageError.message("Could not read the latest commit on \(branch).")
         }
-        if remoteCommit == builtCommit { return .upToDate }
-
-        // Treats local commits rebased on top of remoteCommit as up to date; un-fetched or newer remote commits return nonzero.
-        let ancestor = try runProcess(
-            executable: "/usr/bin/git",
-            arguments: ["-C", repoPath, "merge-base", "--is-ancestor", remoteCommit, builtCommit],
-            timeoutSeconds: timeoutSeconds,
-            captureOutput: false
-        )
-        return ancestor.status == 0
+        return remoteCommit == upstreamCommit
             ? .upToDate
-            : .available(UpdateInfo(currentCommit: builtCommit, remoteCommit: remoteCommit))
+            : .available(UpdateInfo(currentCommit: upstreamCommit, remoteCommit: remoteCommit))
     }
 
     public static func parseRemoteCommit(_ output: String) -> String? {
@@ -58,29 +50,72 @@ public enum AppUpdater {
         return sha
     }
 
-    /// Pulls latest main and rebuilds `dist/UsageBar.app`, returning the built bundle path.
-    public static func prepareUpdate(repoPath: String, timeoutSeconds: TimeInterval = 300) throws -> String {
-        let script = URL(fileURLWithPath: repoPath).appendingPathComponent("scripts/update-app.sh").path
-        guard FileManager.default.fileExists(atPath: script) else {
-            throw UsageError.message("Update script not found at \(script).")
+    /// Clones or fast-forwards a clean mirror in `Application Support/UsageBar/repo` and builds `dist/UsageBar.app`.
+    public static func prepareUpdate(
+        remoteURL: String,
+        branch: String = "main",
+        workDir: String? = nil,
+        timeoutSeconds: TimeInterval = 300
+    ) throws -> String {
+        let repoDir: URL
+        if let workDir {
+            repoDir = URL(fileURLWithPath: workDir)
+        } else {
+            guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+                throw UsageError.message("Could not locate Application Support directory.")
+            }
+            repoDir = appSupport.appendingPathComponent("UsageBar/repo")
         }
-        let result = try runProcess(
+
+        let parentDir = repoDir.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: parentDir, withIntermediateDirectories: true)
+
+        let gitDir = repoDir.appendingPathComponent(".git").path
+        if FileManager.default.fileExists(atPath: gitDir) {
+            try runChecked(
+                executable: "/usr/bin/git",
+                arguments: ["-C", repoDir.path, "remote", "set-url", "origin", remoteURL],
+                workingDirectory: parentDir,
+                timeoutSeconds: 30,
+                failureMessage: "Failed to configure update remote."
+            )
+            try runChecked(
+                executable: "/usr/bin/git",
+                arguments: ["-C", repoDir.path, "fetch", "origin", branch],
+                workingDirectory: parentDir,
+                timeoutSeconds: 60,
+                failureMessage: "Failed to fetch latest \(branch)."
+            )
+            try runChecked(
+                executable: "/usr/bin/git",
+                arguments: ["-C", repoDir.path, "reset", "--hard", "origin/\(branch)"],
+                workingDirectory: parentDir,
+                timeoutSeconds: 30,
+                failureMessage: "Failed to switch to latest \(branch)."
+            )
+        } else {
+            try? FileManager.default.removeItem(at: repoDir)
+            try runChecked(
+                executable: "/usr/bin/git",
+                arguments: ["clone", "--branch", branch, "--single-branch", remoteURL, repoDir.path],
+                workingDirectory: parentDir,
+                timeoutSeconds: 120,
+                failureMessage: "Failed to clone repository for update."
+            )
+        }
+
+        let buildScript = repoDir.appendingPathComponent("scripts/build-app.sh").path
+        try runChecked(
             executable: "/bin/bash",
-            arguments: [script],
+            arguments: [buildScript],
+            workingDirectory: repoDir,
             timeoutSeconds: timeoutSeconds,
-            captureOutput: true,
-            combineStderr: true
+            failureMessage: "Build failed while updating."
         )
-        guard result.status == 0 else {
-            let detail = result.output
-                .split(whereSeparator: \.isNewline)
-                .last
-                .map { String($0).trimmingCharacters(in: .whitespaces) }
-            throw UsageError.message(detail.flatMap { $0.isEmpty ? nil : $0 } ?? "Update failed while pulling or rebuilding.")
-        }
-        let builtApp = URL(fileURLWithPath: repoPath).appendingPathComponent("dist/UsageBar.app").path
+
+        let builtApp = repoDir.appendingPathComponent("dist/UsageBar.app").path
         guard FileManager.default.fileExists(atPath: builtApp) else {
-            throw UsageError.message("Build finished, but \(builtApp) was not found.")
+            throw UsageError.message("Build finished, but UsageBar.app was not found.")
         }
         return builtApp
     }
@@ -112,6 +147,7 @@ public enum AppUpdater {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
         process.arguments = ["-c", script, "_", builtAppPath, targetAppPath, String(pid)]
+        process.currentDirectoryURL = FileManager.default.temporaryDirectory
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
@@ -123,9 +159,34 @@ public enum AppUpdater {
         let output: String
     }
 
+    private static func runChecked(
+        executable: String,
+        arguments: [String],
+        workingDirectory: URL,
+        timeoutSeconds: TimeInterval,
+        failureMessage: String
+    ) throws {
+        let result = try runProcess(
+            executable: executable,
+            arguments: arguments,
+            workingDirectory: workingDirectory,
+            timeoutSeconds: timeoutSeconds,
+            captureOutput: true,
+            combineStderr: true
+        )
+        guard result.status == 0 else {
+            let detail = result.output
+                .split(whereSeparator: \.isNewline)
+                .last
+                .map { String($0).trimmingCharacters(in: .whitespaces) }
+            throw UsageError.message(detail.flatMap { $0.isEmpty ? nil : $0 } ?? failureMessage)
+        }
+    }
+
     private static func runProcess(
         executable: String,
         arguments: [String],
+        workingDirectory: URL,
         timeoutSeconds: TimeInterval,
         captureOutput: Bool,
         combineStderr: Bool = false
@@ -133,6 +194,7 @@ public enum AppUpdater {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
+        process.currentDirectoryURL = workingDirectory
         var environment = ProcessInfo.processInfo.environment
         let basePath = "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin"
         environment["PATH"] = environment["PATH"].map { "\($0):\(basePath)" } ?? basePath

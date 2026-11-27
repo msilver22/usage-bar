@@ -21,32 +21,64 @@ struct PanelView: View {
                     .accessibilityLabel("Refresh all subscriptions")
                     .disabled(store.isLoading)
                 Button { store.showingSettings.toggle() } label: { Image(systemName: "gearshape") }
-                    .help("Settings")
-                    .accessibilityLabel("Settings")
+                    .help("Keyboard shortcut settings")
+                    .accessibilityLabel("Keyboard shortcut settings")
             }
-            if let update = updater.availableUpdate {
-                HStack(spacing: 8) {
-                    Image(systemName: "arrow.down.circle.fill").foregroundStyle(.tint)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("Update available").font(.caption).fontWeight(.medium)
-                        Text("main · \(update.shortRemoteCommit)")
-                            .font(.caption2).monospaced().foregroundStyle(.secondary)
+            if updater.isConfigured {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        if updater.isUpdating {
+                            ProgressView().controlSize(.small)
+                            Text("Updating from main…").font(.caption).foregroundStyle(.secondary)
+                            Spacer()
+                        } else if let update = updater.availableUpdate {
+                            Image(systemName: "arrow.down.circle.fill").foregroundStyle(.tint)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("Update available").font(.caption).fontWeight(.medium)
+                                Text("main · \(update.shortRemoteCommit)")
+                                    .font(.caption2).monospaced().foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button("Update") { updater.applyUpdate() }
+                                .controlSize(.small)
+                                .buttonStyle(.borderedProminent)
+                                .accessibilityLabel("Pull latest main and restart UsageBar")
+                        } else {
+                            if updater.isChecking {
+                                ProgressView().controlSize(.small)
+                                Text("Checking for updates…").font(.caption).foregroundStyle(.secondary)
+                            } else {
+                                Image(systemName: "checkmark.circle").foregroundStyle(.secondary).font(.caption)
+                                Text(updater.lastCheckedAt != nil ? "Up to date" : "Updates")
+                                    .font(.caption).foregroundStyle(.secondary)
+                                if let commit = updater.builtCommit {
+                                    Text(String(commit.prefix(7)))
+                                        .font(.caption2).monospaced().foregroundStyle(.tertiary)
+                                        .help("Installed commit")
+                                }
+                            }
+                            Spacer()
+                            Button("Check") { updater.checkNow() }
+                                .controlSize(.small)
+                                .disabled(updater.isChecking)
+                                .accessibilityLabel("Check for updates")
+                        }
                     }
-                    Spacer()
-                    if updater.isUpdating {
-                        ProgressView().controlSize(.small)
-                        Text("Updating…").font(.caption).foregroundStyle(.secondary)
-                    } else {
-                        Button("Update") { updater.applyUpdate() }
-                            .controlSize(.small)
-                            .accessibilityLabel("Pull latest main and restart UsageBar")
+                    Toggle("Auto-update from main", isOn: $updater.autoUpdate)
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    if let updateError = updater.error {
+                        Text(updateError).font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                .padding(10)
-                .background(.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
-            }
-            if let updateError = updater.error {
-                Text(updateError).font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(
+                    (updater.availableUpdate != nil ? Color.accentColor.opacity(0.12) : Color.secondary.opacity(0.08)),
+                    in: RoundedRectangle(cornerRadius: 10)
+                )
             }
             ForEach(store.providers) { provider in
                 card(provider, state: store.states[provider.id] ?? UsageState())
@@ -57,23 +89,6 @@ struct PanelView: View {
                     ForEach(ShortcutChoice.allCases) { choice in Text(choice.rawValue).tag(choice) }
                 }
                 if let shortcutError { Text(shortcutError).font(.caption).foregroundStyle(.red) }
-                if updater.isConfigured {
-                    Toggle("Auto-update from main", isOn: $updater.autoUpdate)
-                        .font(.caption)
-                    HStack {
-                        Button(updater.isChecking ? "Checking…" : "Check for updates") { updater.checkNow() }
-                            .controlSize(.small)
-                            .disabled(updater.isChecking || updater.isUpdating)
-                        Spacer()
-                        if let commit = updater.builtCommit {
-                            Text(updater.availableUpdate == nil && updater.lastCheckedAt != nil
-                                 ? "Up to date · \(commit.prefix(7))"
-                                 : String(commit.prefix(7)))
-                                .font(.caption2).monospaced().foregroundStyle(.secondary)
-                                .help("Installed commit")
-                        }
-                    }
-                }
             } else if let shortcutError {
                 Text(shortcutError).font(.caption).foregroundStyle(.red)
             }

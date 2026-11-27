@@ -14,9 +14,10 @@ final class UpdateStore: ObservableObject {
         didSet { UserDefaults.standard.set(autoUpdate, forKey: Self.autoUpdateKey) }
     }
 
-    let repoPath: String?
+    let remoteURL: String?
     let builtCommit: String?
-    var isConfigured: Bool { repoPath != nil && builtCommit != nil }
+    let upstreamCommit: String?
+    var isConfigured: Bool { remoteURL != nil && upstreamCommit != nil }
     var isPanelOpen: () -> Bool = { false }
 
     private static let autoUpdateKey = "autoUpdateFromMain"
@@ -27,8 +28,9 @@ final class UpdateStore: ObservableObject {
     private var updateTask: Task<Void, Never>?
 
     init(info: [String: Any]? = Bundle.main.infoDictionary) {
-        self.repoPath = info?["UsageBarRepoPath"] as? String
+        self.remoteURL = info?["UsageBarRemoteURL"] as? String
         self.builtCommit = info?["UsageBarGitCommit"] as? String
+        self.upstreamCommit = (info?["UsageBarUpstreamCommit"] as? String) ?? self.builtCommit
         self.autoUpdate = UserDefaults.standard.bool(forKey: Self.autoUpdateKey)
     }
 
@@ -53,14 +55,14 @@ final class UpdateStore: ObservableObject {
     func checkNow() { check(userInitiated: true) }
 
     private func check(userInitiated: Bool) {
-        guard let repoPath, let builtCommit, !isChecking, !isUpdating else { return }
+        guard let remoteURL, let upstreamCommit, !isChecking, !isUpdating else { return }
         isChecking = true
         if userInitiated { error = nil }
         checkTask?.cancel()
         checkTask = Task {
             do {
                 let status = try await Task.detached {
-                    try AppUpdater.check(repoPath: repoPath, builtCommit: builtCommit)
+                    try AppUpdater.check(remoteURL: remoteURL, upstreamCommit: upstreamCommit)
                 }.value
                 guard !Task.isCancelled else { return }
                 isChecking = false
@@ -84,14 +86,14 @@ final class UpdateStore: ObservableObject {
     }
 
     func applyUpdate() {
-        guard let repoPath, !isUpdating else { return }
+        guard let remoteURL, !isUpdating else { return }
         isUpdating = true
         error = nil
         let targetApp = Bundle.main.bundlePath
         updateTask = Task {
             do {
                 let builtApp = try await Task.detached {
-                    try AppUpdater.prepareUpdate(repoPath: repoPath)
+                    try AppUpdater.prepareUpdate(remoteURL: remoteURL)
                 }.value
                 try AppUpdater.relaunch(builtAppPath: builtApp, targetAppPath: targetApp)
                 NSApp.terminate(nil)

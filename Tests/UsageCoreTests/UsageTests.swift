@@ -273,15 +273,8 @@ private func withExecutable(_ body: String, run: (String) throws -> Void) throws
     _ = try git(["push", "-u", "origin", "main"], in: local)
     let v1 = try git(["rev-parse", "HEAD"], in: local)
 
-    // Exact match with origin/main is up to date.
-    #expect(try AppUpdater.check(repoPath: local.path, builtCommit: v1) == .upToDate)
-
-    // Local commit ahead of origin/main is still up to date.
-    try "local".write(to: local.appendingPathComponent("local.txt"), atomically: true, encoding: .utf8)
-    _ = try git(["add", "."], in: local)
-    _ = try git(["commit", "-m", "local feature"], in: local)
-    let localHead = try git(["rev-parse", "HEAD"], in: local)
-    #expect(try AppUpdater.check(repoPath: local.path, builtCommit: localHead) == .upToDate)
+    // Exact match with origin/main is up to date (works directly against remote URL without touching the local repo).
+    #expect(try AppUpdater.check(remoteURL: remote.path, upstreamCommit: v1) == .upToDate)
 
     // A new upstream commit on origin/main triggers an available update.
     _ = try git(["clone", "-b", "main", remote.path, upstream.path])
@@ -293,5 +286,5 @@ private func withExecutable(_ body: String, run: (String) throws -> Void) throws
     _ = try git(["push", "origin", "main"], in: upstream)
     let v2 = try git(["rev-parse", "HEAD"], in: upstream)
 
-    #expect(try AppUpdater.check(repoPath: local.path, builtCommit: localHead) == .available(UpdateInfo(currentCommit: localHead, remoteCommit: v2)))
+    #expect(try AppUpdater.check(remoteURL: remote.path, upstreamCommit: v1) == .available(UpdateInfo(currentCommit: v1, remoteCommit: v2)))
 }
